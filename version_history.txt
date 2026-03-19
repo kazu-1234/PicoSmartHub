@@ -1,0 +1,86 @@
+Thunder Sensor - バージョン履歴
+================================
+
+v19.2.0
+- 旧バージョン（安定版）
+
+v19.3.0 (2026-03-06)
+- 動作安定化修正（機能変更なし）
+- HTTPリクエスト読み取りのbusy-waitにdelay(1)を追加してCPU解放・Watchdog保護
+- handleLEDBlink()のmutex取得前にledBlinkActiveフラグの事前チェックを追加（mutex競合軽減）
+- distance_start / distance_stop 送信後のdelay(100)→delay(10)に短縮
+- requestSendBathClear処理のdelay(50)→delay(10)に短縮
+- bath_clear処理のフォーマットバグ修正（{ の直後にコードが続いていた）
+- SwitchBotコマンドキューのローカルバッファをゼロ初期化してNULL終端を保証
+
+v19.3.1 (2026-03-06)
+- 5-7秒間隔のフリーズ修正
+- handleWolPollingのポーリング間隔を5秒→30秒に延長（Core1のwifi_mutex長時間保持を軽減）
+- handleWolPollingのHTTPSリトライを除去し1回のみに変更、タイムアウトを5秒→3秒に短縮
+- handleWolPolling内のdelay(200)→delay(100)に短縮
+- logDataToGoogleSheetのタイムアウトを5秒→3秒に短縮
+- handleActionFlags内のWiFiClient接続にsetTimeout(1000)を追加（接続タイムアウト1秒制限）
+- handleActionFlags内のdelay()をflush()+stop()に置換（ノンブロッキング化）
+
+v19.4.0 (2026-03-06)
+- 起動直後の即フリーズおよびWatchdog再起動ループの原因（Core0 setup完了直前の String 型への代入時のヒープ競合）を修正（data_mutexによる保護を追加）
+- 未確定なタイムアウト短縮やポーリング延長設定を破棄し、完全に安定動作していた旧バージョン（v19.2.0以前）の通信間隔・タイムアウト等に完全復元
+  - GAS / WoLポーリング間隔を30秒→5秒に復元
+  - GAS / WoL通信タイムアウトを3秒→5秒に復元
+  - WoLポーリング通信のリトライ（2回）とdelay待機を復元
+
+v19.6.0 (2026-03-07)
+- 起動時フリーズおよび秒更新の定期停止の根本原因を修正（WiFiミューテックス長期保持・ブロッキングNTP）
+- handleConnection(): NTP同期をステートマシン化し完全非同期化
+  - 旧: for(i<60){ delay(200); } = 12秒間Core1完全ブロック → 起動直後にアニメーションが動かない原因
+  - 新: NTP.begin()後すぐリターン、ntpWaiting/ntpWaitStartフラグで次ループにて結果確認
+  - 12秒タイムアウトもノンブロッキングでmillis()比較により管理
+- handleServerClient(): server.accept()前の不要なwifi_mutexロックを除去
+  - server.accept()はブロッキングでなくポーリング操作のため排他不要
+- handleWolPolling(): wifi_mutexを関数全体ではなくHTTPリクエストごとに取得・解放
+  - 旧: 関数先頭でmutex取得→全HTTPリクエスト完了まで保持（最大25秒以上）→ 秒更新が定期停止する原因
+  - 新: シグナル確認・コマンド取得・ACK送信の各リクエストを個別にmutex取得・解放
+- handleWolPolling(): リトライ待機をdelay(500)→delay(100)に短縮
+
+v19.5.0 (2026-03-06)
+- 3〜30秒間隔の不規則フリーズ（Watchdog誤発火）の根本原因を修正
+- petWatchdog()ヘルパーを追加し、loop()内の複数箇所から呼び出し
+  - Display::update()のmutex待ち前後、handlePeriodicTasks()後、delay(10)直前も呼び出し
+  - DHT22読み取り前後でも呼び出し（最大2.5秒かかる場合に対応）
+- FREEZE_TIMEOUT_MSを10秒→15秒に延長（WiFi/HTTPS処理中の誤Watchdog防止）
+- Display::update()のmutex_enter_blockingをtry_enterスピンに変更（デッドロック根絶）
+  - Core1がwifi_mutex＋data_mutexを長時間保持中でもCore0がタイムアウトしない
+  - 2秒以内にmutex取得できない場合はそのフレームのLCD更新をスキップ（次フレームで回復）
+- checkInactivity()をtry_enter（取れなければスキップ）に変更
+- handleLEDBlink()をtry_enter（取れなければその呼び出しをスキップ）に変更
+- handleButton()の短押し・長押し処理をtry_enterスピンに変更
+- loop()末尾の二重バックライトチェック（mutex_enter_blocking）を削除（handlePeriodicTasksで管理済み）
+- Core1のloop1()でCore0起動完了前はWatchdog監視を開始しないよう変更（起動時誤トリガー防止）
+- WiFi連続失敗時のdelay(5000)を1秒×5回ループに分割（Core1ループ停滞軽減）
+
+v19.7.0 (2026-03-10)
+- バグ修正: アプリから/api/ir/sendで送信されたIRコマンドが、Core0のloop()で一切処理されていなかった致命的バグを修正
+  - Core1がHTTPリクエストからirSendRequestedフラグをセットしていたが、Core0にそのフラグを読み取るコードが存在しなかった
+  - Core0のloop()末尾にフル対応のIRコマンドディスパッチ処理を追加
+  - 対応デバイス: LIGHT(7コマンド), TV(40+コマンド), AIRCON(16コマンド), FAN(5コマンド), SPEAKER(22コマンド)
+  - mutex保護下でフラグとコマンドデータを安全にコピーしてから信号送信を実行
+
+v19.6.1 (2026-03-15)
+- 温湿度センサー（DHT20）の初回読み取り成功時のみ、RGB LEDを青色で3回点滅する処理を追加
+- 初回点滅は1回のみ実行されるよう、firstSensorReadBlinkDoneフラグで再実行を防止
+
+v19.6.2 (2026-03-15)
+- 仕様変更: LED点滅トリガーを「温湿度の初回読み取り成功時」から「IP経由 /api/sensors の初回JSON読み取り成功時」に変更
+- /api/sensors のHTTP 200レスポンス送信成功後のみ、1回だけ青色3回点滅を実行
+- firstJsonReadBlinkDoneフラグを追加し、2回目以降のJSONアクセスでは点滅しないように制御
+
+v19.6.3 (2026-03-15)
+- 仕様変更: LED点滅トリガーを「/api/sensors 初回成功時」から「ルートURL (/) の初回アクセス成功時」に変更
+- ブラウザで http://<PicoのIP>/ へ最初にアクセスした1回目で、青色3回点滅するよう修正
+- 互換性維持のため /api/sensors 初回アクセスでも同じ1回点滅判定を共有
+
+[v19.8.0] - 2026-03-15
+  - IR送信時の文字列比較失敗バグを修正 (device/cmd変数の未初期化とstrncpyの終端処理を修正)
+
+[v19.8.1] - 2026-03-15
+  - 起動時のLED点灯終了とバックライト消灯・メイン画面遷移のタイミングを同期化 (LED点灯中に初期化処理を行うよう順序を修正)
