@@ -1,0 +1,170 @@
+/**
+ * 雷センサー用 Google Apps Script
+ * 温湿度データ（室内・屋外）と雷データをスプレッドシートに記録
+ *
+ * 使用方法:
+ * 1. 下の SPREADSHEET_ID に対象シートのIDを設定
+ *    （スプレッドシートURLの https://docs.google.com/spreadsheets/d/<ID>/edit の <ID> 部分）
+ * 2. このコードをApps Scriptエディタに貼り付け
+ * 3. 「デプロイ」→「新しいデプロイ」
+ * 4. 種類: ウェブアプリ / アクセス: 全員
+ * 5. デプロイ後のURLを config.h の GAS_URL に設定
+ */
+
+var SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID_HERE';
+
+function doGet(e) {
+  if (!e || !e.parameter) {
+    return createResponse('error', 'No parameters received');
+  }
+
+  try {
+    var params = e.parameter;
+    var spreadsheet = getTargetSpreadsheet();
+
+    var sheetName = getSheetName(params.sheet);
+    var sheet = ensureSheet(sheetName, spreadsheet);
+    var timestamp = new Date();
+
+    var hasTempHum = isProvided(params.temp) && isProvided(params.hum);
+    var hasDistance = isProvided(params.dist);
+
+    if (hasTempHum) {
+      var indoorTemp = params.temp;
+      var indoorHum = params.hum;
+      var outdoorTemp = isProvided(params.outdoor_temp) ? params.outdoor_temp : '';
+      var outdoorHum = isProvided(params.outdoor_hum) ? params.outdoor_hum : '';
+
+      sheet.appendRow([timestamp, indoorTemp, indoorHum, '', outdoorTemp, outdoorHum]);
+
+      return createResponse('success', 'TempHum logged', {
+        indoor_temp: indoorTemp,
+        indoor_hum: indoorHum,
+        outdoor_temp: outdoorTemp,
+        outdoor_hum: outdoorHum
+      });
+    }
+
+    if (hasDistance) {
+      sheet.appendRow([timestamp, params.dist]);
+      return createResponse('success', 'Lightning logged', {
+        distance: params.dist
+      });
+    }
+
+    return createResponse('error', 'No valid data (temp/hum or dist required)');
+  } catch (err) {
+    return createResponse('error', err.toString());
+  }
+}
+
+function getTargetSpreadsheet() {
+  if (SPREADSHEET_ID && SPREADSHEET_ID !== 'PASTE_SPREADSHEET_ID_HERE') {
+    return SpreadsheetApp.openById(SPREADSHEET_ID);
+  }
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active) {
+    return active;
+  }
+  throw new Error('Spreadsheet not found. Set SPREADSHEET_ID.');
+}
+
+function getSheetName(nameParam) {
+  if (!isProvided(nameParam)) {
+    throw new Error('Sheet parameter missing');
+  }
+  var decoded = nameParam;
+  try {
+    decoded = decodeURIComponent(nameParam);
+  } catch (err) {
+    // ignore
+  }
+  return decoded;
+}
+
+function ensureSheet(name, spreadsheet) {
+  var sheet = spreadsheet.getSheetByName(name);
+  if (sheet) {
+    return sheet;
+  }
+  sheet = spreadsheet.insertSheet(name);
+  if (name === '温湿度') {
+    sheet.appendRow(['日時', '室内温度 (°C)', '室内湿度 (%)', '', '屋外温度 (°C)', '屋外湿度 (%)']);
+  } else if (name === '雷の受信履歴') {
+    sheet.appendRow(['日時', '距離 (km)']);
+  }
+  return sheet;
+}
+
+function isProvided(value) {
+  return value !== undefined && value !== null && value !== '';
+}
+
+/**
+ * レスポンスを生成するヘルパー関数
+ */
+function createResponse(status, message, data) {
+  var response = {
+    status: status,
+    message: message,
+    timestamp: new Date().toISOString()
+  };
+  
+  if (data) {
+    response.data = data;
+  }
+  
+  return ContentService
+    .createTextOutput(JSON.stringify(response))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * テスト用関数 - 温湿度と雷データを一括送信
+ */
+function testSendAllData() {
+  var tempHumEvent = {
+    parameter: {
+      sheet: "温湿度",
+      temp: "25.0",
+      hum: "50.0",
+      outdoor_temp: "20.0",
+      outdoor_hum: "60.0"
+    }
+  };
+
+  var lightningEvent = {
+    parameter: {
+      sheet: "雷の受信履歴",
+      dist: "8.5"
+    }
+  };
+
+  var tempResult = doGet(tempHumEvent);
+  Logger.log('[温湿度] ' + tempResult.getContent());
+
+  var lightningResult = doGet(lightningEvent);
+  Logger.log('[雷] ' + lightningResult.getContent());
+}
+
+/**
+ * スプレッドシートを開いた時にメニューを追加
+ */
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('雷センサー')
+    .addItem('最新データへ移動', 'goToLatestEntry')
+    .addItem('テスト記録', 'testSendAllData')
+    .addToUi();
+}
+
+/**
+ * 最新のデータ行に移動
+ */
+function goToLatestEntry() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 0) {
+    sheet.setActiveRange(sheet.getRange(lastRow, 1));
+  }
+}
